@@ -1,9 +1,15 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
-#include <aliyun_mqtt.h>
+#include <Arduino.h>
 #include "PubSubClient.h"
 #include "WiFi.h"
+#include <aliyun_mqtt.h>
+#include <ArduinoJson.h>
 #include "Ticker.h"
+
+
+// 风扇引脚
+#define INA 13
+#define INB 12
 
 #define WIFI_SSID "HUAWEI nova4"       //wifi名
 #define WIFI_PASSWD "12345678" //wifi密码
@@ -33,125 +39,129 @@ WiFiClient espClient;               //创建网络连接客户端
 PubSubClient mqttClient(espClient); //通过网络客户端连接创建mqtt连接客户端
 
 //连接WIFI相关函数
-void setupWifi()
-{
-  delay(10);
-  Serial.println("连接WIFI");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWD);
-  while (!WiFi.isConnected())
-  {
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println("OK");
-  Serial.println("Wifi连接成功");
+void setupWifi() {
+	delay(10);
+	Serial.println("连接WIFI");
+	WiFi.begin(WIFI_SSID, WIFI_PASSWD);
+	while (!WiFi.isConnected()) {
+	Serial.print(".");
+		delay(500);
+	}
+	Serial.println("OK");
+	Serial.println("Wifi连接成功");
 }
 
-//重连函数, 如果客户端断线,可以通过此函数重连
-void clientReconnect()
-{
-  while (!mqttClient.connected()) //再重连客户端
-  {
-    Serial.println("reconnect MQTT...");
-    if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET))
-    {
-      Serial.println("connected");
-    }
-    else
-    {
-      Serial.println("failed");
-      Serial.println(mqttClient.state());
-      Serial.println("try again in 5 sec");
-      delay(5000);
-    }
-  }
+// 重连函数, 如果客户端断线,可以通过此函数重连
+void clientReconnect() {
+	while (!mqttClient.connected()) { //再重连客户端
+		Serial.println("reconnect MQTT...");
+		if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
+			Serial.println("connected");
+		} else {
+			Serial.println("failed");
+			Serial.println(mqttClient.state());
+			Serial.println("try again in 5 sec");
+			delay(5000);
+		}
+	}
 }
 //mqtt发布post消息(上传数据)
-void mqttPublish()
-{
-  if (mqttClient.connected())
-  {
-    //先拼接出json字符串
-    char param[32];
-    char jsonBuf[128];
-    // sprintf(param, "{\"LightSwitch\":%d}", digitalRead(LED_B)); //我们把要上传的数据写在param里
-    sprintf(param, "{\"temperature\":%.1f}", 36.6); //我们把要上传的数据写在param里
-    postMsgId += 1;
-    sprintf(jsonBuf, ALINK_BODY_FORMAT, postMsgId, ALINK_METHOD_PROP_POST, param);
-    //再从mqtt客户端中发布post消息
-    if (mqttClient.publish(ALINK_TOPIC_PROP_POST, jsonBuf))
-    {
-      Serial.print("Post message to cloud: ");
-      Serial.println(jsonBuf);
-    }
-    else
-    {
-      Serial.println("Publish message to cloud failed!");
-    }
-  }
+void mqttPublish() {
+	if (mqttClient.connected()) {
+		//先拼接出json字符串
+		char param[32];
+		char jsonBuf[128];
+		// sprintf(param, "{\"LightSwitch\":%d}", digitalRead(LED_B)); //我们把要上传的数据写在param里
+		sprintf(param, "{\"temperature\":%.1f}", 36.6); //我们把要上传的数据写在param里
+		postMsgId += 1;
+		sprintf(jsonBuf, ALINK_BODY_FORMAT, postMsgId, ALINK_METHOD_PROP_POST, param);
+		//再从mqtt客户端中发布post消息
+		if (mqttClient.publish(ALINK_TOPIC_PROP_POST, jsonBuf)) {
+			Serial.print("Post message to cloud: ");
+			Serial.println(jsonBuf);
+		} else {
+			Serial.println("Publish message to cloud failed!");
+		}
+	}
 }
 // 收到消息回调
 void callback(char *topic, byte *payload, unsigned int length)
 {
-//   if (strstr(topic, ALINK_TOPIC_PROP_SET))
-//   {
-    Serial.println("收到下发的命令主题:");
-    Serial.println(topic);
-    Serial.println("下发的内容是:");
-    payload[length] = '\0'; //为payload添加一个结束附,防止Serial.println()读过了
-    Serial.println((char *)payload);
+	if (strstr(topic, ALINK_TOPIC_PROP_SET)) {
+		Serial.println("收到下发的命令主题:");
+		Serial.println(topic);
+		Serial.println("下发的内容是:");
+		payload[length] = '\0'; //为payload添加一个结束附,防止Serial.println()读过了
+		Serial.println((char *)payload);
 
-    // 接下来是收到的json字符串的解析
-    DynamicJsonDocument doc(100);
-    DeserializationError error = deserializeJson(doc, payload);
-    if (error)
-    {
-      Serial.println("parse json failed");
-      return;
-    }
-    JsonObject setAlinkMsgObj = doc.as<JsonObject>();
-    serializeJsonPretty(setAlinkMsgObj, Serial);
-    Serial.println();
+		// 接下来是收到的json字符串的解析
+		DynamicJsonDocument doc(100);
+		DeserializationError error = deserializeJson(doc, payload);
+		if (error)
+		{
+			Serial.println("parse json failed");
+			return;
+		}
+		JsonObject setAlinkMsgObj = doc.as<JsonObject>();
+		serializeJsonPretty(setAlinkMsgObj, Serial);
+		Serial.println();
 
-    // 这里是一个点灯小逻辑
-    int lightSwitch = setAlinkMsgObj["params"]["LightSwitch"];
-    digitalWrite(LED_B, lightSwitch);
-    mqttPublish(); //由于将来做应用可能要获取灯的状态,所以在这里发布一下
-//   }
+		// 这里是一个点灯小逻辑
+		int lightSwitch = setAlinkMsgObj["params"]["LightSwitch"];
+		digitalWrite(LED_B, lightSwitch);
+		mqttPublish(); //由于将来做应用可能要获取灯的状态,所以在这里发布一下
+	}
 }
 
-void setup()
-{
-  pinMode(LED_B, OUTPUT);
-  Serial.begin(115200);
-  setupWifi();
-  if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET))
-  {
-    Serial.println("MQTT服务器连接成功!");
-  };
-  //! 订阅Topic !!这是关键!!
-  mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
-  mqttClient.setCallback(callback); //绑定收到set主题时的回调(命令下发回调)
-  tim1.attach(10, mqttPublish);     //启动每5秒发布一次消息
+void fanPositive(bool flag, int data) {
+	analogWrite(INA, flag ? 0    : data); // 0--255
+	analogWrite(INB, flag ? data : 0);
 }
 
-void loop()
-{
-  //检测有没有断线
-  if (!WiFi.isConnected()) //先看WIFI是否还在连接
-  {
-    setupWifi();
-  }
-  else //如果WIFI连接了,
-  {
-    if (!mqttClient.connected()) //再看mqtt连接了没
-    {
-      Serial.println("mqtt disconnected!Try reconnect now...");
-      Serial.println(mqttClient.state());
-      clientReconnect();
-    }
-  }
 
-  //mqtt客户端监听
-  mqttClient.loop();
+void setup() {
+	pinMode(LED_B, OUTPUT);
+
+	pinMode(INA, OUTPUT);
+	pinMode(INB, OUTPUT);
+
+	Serial.begin(115200);
+	/* ------------------------------------------------------------------------------------
+	setupWifi();
+	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
+		Serial.println("MQTT服务器连接成功!");
+	}
+	//! 订阅Topic !!这是关键!!
+	mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
+	mqttClient.setCallback(callback); //绑定收到set主题时的回调(命令下发回调)
+	tim1.attach(10, mqttPublish);     //启动每5秒发布一次消息
+	--------------------------------------------------------------------------------------*/
+
+}
+
+
+int data = 0;
+void loop() {
+	/* -------------------------------------------------------------
+	//检测有没有断线
+	if (!WiFi.isConnected()) { // 判断WiFi是否连接
+		setupWifi();
+	}
+	else { //如果WIFI连接了,
+		if (!mqttClient.connected()) { //再看mqtt连接了没
+			Serial.println("mqtt disconnected!Try reconnect now...");
+			Serial.println(mqttClient.state());
+			clientReconnect();
+		}
+	}
+	//mqtt客户端监听
+	mqttClient.loop(); // 不会阻塞
+	------------------------------------------------------------------*/
+	if (Serial.available() > 0) {
+		String str = Serial.readString();
+		data = atoi(str.c_str());
+	}	
+	Serial.println(data);
+	fanPositive(data, 200);
+	
 }
