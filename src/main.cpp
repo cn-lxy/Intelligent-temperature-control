@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <Arduino.h>
 #include "PubSubClient.h"
 #include "WiFi.h"
 #include <aliyun_mqtt.h>
@@ -10,6 +9,7 @@
 // 风扇引脚
 #define INA 13
 #define INB 12
+#define LED_B 2 // 定义LED灯的引脚
 
 #define WIFI_SSID "HUAWEI nova4"       //wifi名
 #define WIFI_PASSWD "12345678" //wifi密码
@@ -28,15 +28,24 @@
 // 这是post上传数据使用的模板
 #define ALINK_BODY_FORMAT "{\"id\":\"%u\",\"version\":\"1.0\",\"method\":\"%s\",\"params\":%s}"
 
-#define LED_B 2 // 定义LED灯的引脚
 
+int rate = 0;      // 电机转速 0-255
+int direction = 0; // 电机转向
 int postMsgId = 0; //记录已经post了多少条
 Ticker tim1;       //这个定时器是为了每5秒上传一次数据
+
 
 /*------------------------------------------------------------------------------------------*/
 
 WiFiClient espClient;               //创建网络连接客户端
 PubSubClient mqttClient(espClient); //通过网络客户端连接创建mqtt连接客户端
+
+// 风扇处理
+void fanControl(bool flag, int data) {
+	analogWrite(INA, flag ? 0    : data); // 0--255
+	analogWrite(INB, flag ? data : 0);
+}
+
 
 //连接WIFI相关函数
 void setupWifi() {
@@ -106,44 +115,19 @@ void callback(char *topic, byte *payload, unsigned int length)
 		serializeJsonPretty(setAlinkMsgObj, Serial);
 		Serial.println();
 
-		// 这里是一个点灯小逻辑
-		int lightSwitch = setAlinkMsgObj["params"]["LightSwitch"];
-		digitalWrite(LED_B, lightSwitch);
-		mqttPublish(); //由于将来做应用可能要获取灯的状态,所以在这里发布一下
+		// 风扇逻辑处理
+		rate = setAlinkMsgObj["params"]["fanRate"];
+		direction = setAlinkMsgObj["params"]["fanDirection"];
+		Serial.print("rate: ");
+		Serial.println(rate);
+		Serial.print("direction: ");
+		Serial.println(direction);
+
 	}
 }
 
-void fanPositive(bool flag, int data) {
-	analogWrite(INA, flag ? 0    : data); // 0--255
-	analogWrite(INB, flag ? data : 0);
-}
-
-
-void setup() {
-	pinMode(LED_B, OUTPUT);
-
-	pinMode(INA, OUTPUT);
-	pinMode(INB, OUTPUT);
-
-	Serial.begin(115200);
-	/* ------------------------------------------------------------------------------------
-	setupWifi();
-	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
-		Serial.println("MQTT服务器连接成功!");
-	}
-	//! 订阅Topic !!这是关键!!
-	mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
-	mqttClient.setCallback(callback); //绑定收到set主题时的回调(命令下发回调)
-	tim1.attach(10, mqttPublish);     //启动每5秒发布一次消息
-	--------------------------------------------------------------------------------------*/
-
-}
-
-
-int data = 0;
-void loop() {
-	/* -------------------------------------------------------------
-	//检测有没有断线
+//检测有没有断线
+void mqttCheck() {
 	if (!WiFi.isConnected()) { // 判断WiFi是否连接
 		setupWifi();
 	}
@@ -154,14 +138,30 @@ void loop() {
 			clientReconnect();
 		}
 	}
-	//mqtt客户端监听
-	mqttClient.loop(); // 不会阻塞
-	------------------------------------------------------------------*/
-	if (Serial.available() > 0) {
-		String str = Serial.readString();
-		data = atoi(str.c_str());
-	}	
-	Serial.println(data);
-	fanPositive(data, 200);
-	
 }
+
+void setup() {
+	pinMode(LED_B, OUTPUT);
+
+	pinMode(INA, OUTPUT);
+	pinMode(INB, OUTPUT);
+
+	Serial.begin(115200);
+	setupWifi();
+	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
+		Serial.println("MQTT服务器连接成功!");
+	}
+	// ! 订阅Topic !!这是关键!!
+	mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
+	mqttClient.setCallback(callback); // 绑定收到set主题时的回调(命令下发回调)
+	// tim1.attach(10, mqttPublish);     // 启动每5秒发布一次消息
+}
+
+
+void loop() {
+	mqttCheck();  // 检查连接
+	mqttClient.loop();  // mqtt客户端监听 不会阻塞
+
+	fanControl(direction, rate);
+}
+
