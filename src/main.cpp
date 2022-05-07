@@ -15,14 +15,20 @@
 #include <Wire.h>
 #endif
 
-// OLED 显示IIC引脚
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+// GPIO DS18B20 
+#define DS18B20_PIN 4
+
+// GPIO OLED IIC引脚
 static const uint8_t ESP32_SCL = 5;
 static const uint8_t ESP32_SDA = 18;
 
-// 风扇引脚
-#define INA 13
-#define INB 12
-#define LED_B 2 // 定义LED灯的引脚
+// GPIO 风扇引脚
+#define INA_PIN 13
+#define INB_PIN 12
+// #define LED_B 2 // 定义LED灯的引脚
 
 #define WIFI_SSID "HUAWEI nova4"       //wifi名
 #define WIFI_PASSWD "12345678" //wifi密码
@@ -46,19 +52,31 @@ int rate = 0;      // 电机转速 0-255
 int direction = 0; // 电机转向
 int postMsgId = 0; // 记录已经post了多少条
 Ticker tim1;       // 这个定时器是为了每5秒上传一次数据
-int temperature = 0;      // 温度
+int readTemperature = 0;      // 环境温度
+int setTemperature  = 0;      // 设置温度
 
-/*------------------------------------------------------------------------------------------*/
-
+/*------------------------------------------- object -----------------------------------------------*/
 WiFiClient espClient;               //创建网络连接客户端
 PubSubClient mqttClient(espClient); //通过网络客户端连接创建mqtt连接客户端
 
 U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0,  /*SCL*/ ESP32_SCL,  /*SDA*/ ESP32_SDA, /*reset*/ U8X8_PIN_NONE);//构造
 
+OneWire oneWire(DS18B20_PIN);
+DallasTemperature sensors(&oneWire);
+/*------------------------------------------------------------------------------------------*/
+
 // 风扇控制
 void fanControl(bool flag, int data) {
-	analogWrite(INA, flag ? 0    : data); // 0--255
-	analogWrite(INB, flag ? data : 0);
+	int rate = 0;
+	if (data == 1) {
+		rate = 150;
+	} else if (data == 2) {
+		rate = 200;
+	} else if (data == 3) {
+		rate = 255;
+	}
+	analogWrite(INA_PIN, flag ? 0    : rate); // 0--255
+	analogWrite(INB_PIN, flag ? rate : 0);
 }
 
 // 屏幕显示
@@ -66,9 +84,26 @@ void oledDisplay() {
     u8g2.clearBuffer();                                       
     u8g2.setFont(u8g2_font_ncenB08_tr);      
     u8g2.setColorIndex(2); 
-    char info[32];
-    sprintf(info, "temperature: %d", temperature);
-    u8g2.drawStr(0, 10, info);       
+    char info1[32];
+    char info2[32];
+    char info3[32];
+    sprintf(info1, "setTemperature: %d", setTemperature);
+    sprintf(info2, "readTemperature: %d", readTemperature);
+	if (rate == 1) {
+		sprintf(info3, "rate: %s", "low");
+	} else if (rate == 2) {
+		sprintf(info3, "rate: %s", "center");
+	} else if (rate == 3) {
+		sprintf(info3, "rate: %s", "hight");
+	} else {
+		sprintf(info3, "rate: %s", "off");
+	}
+    
+
+    u8g2.drawStr(0, 10, info1);       
+    u8g2.drawStr(0, 20, info2);       
+    u8g2.drawStr(0, 30, info3);       
+
     u8g2.sendBuffer();                                       
 }
 
@@ -144,7 +179,7 @@ void callback(char *topic, byte *payload, unsigned int length)
 		// 风扇逻辑处理
 		rate        = setAlinkMsgObj["params"]["fanRate"];
 		direction   = setAlinkMsgObj["params"]["fanDirection"];
-        temperature = setAlinkMsgObj["params"]["temperature"];
+        setTemperature = setAlinkMsgObj["params"]["temperature"];
 		Serial.print("rate: ");
 		Serial.println(rate);
 		Serial.print("direction: ");
@@ -166,15 +201,22 @@ void mqttCheck() {
 	}
 }
 
-void setup() {
-	pinMode(LED_B, OUTPUT);
+// 获取DS18B20温度
+void getTemperature() {
+	sensors.requestTemperatures(); 
+	float temperatureC = sensors.getTempCByIndex(0);
+	readTemperature = int(temperatureC);
+	Serial.print(temperatureC);
+	Serial.println("ºC");
+}
 
-	pinMode(INA, OUTPUT);
-	pinMode(INB, OUTPUT);
+void setup() {
+	Serial.begin(115200);
+	pinMode(INA_PIN, OUTPUT);
+	pinMode(INB_PIN, OUTPUT);
+	pinMode(DS18B20_PIN, OUTPUT);
 
     u8g2.begin();
-
-	Serial.begin(115200);
     
 	setupWifi();
 	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
@@ -184,6 +226,9 @@ void setup() {
 	mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
 	mqttClient.setCallback(callback); // 绑定收到set主题时的回调(命令下发回调)
 	// tim1.attach(10, mqttPublish);     // 启动每5秒发布一次消息
+
+	// Start the DS18B20 sensor
+  	sensors.begin();
 }
 
 
@@ -194,4 +239,6 @@ void loop() {
 	fanControl(direction, rate);
 
     oledDisplay();
+
+	getTemperature();
 }
