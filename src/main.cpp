@@ -18,6 +18,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+/*------------------------------------------ GPIO --------------------------------------------------*/
 // GPIO DS18B20 
 #define DS18B20_PIN 4
 
@@ -28,8 +29,12 @@ static const uint8_t ESP32_SDA = 18;
 // GPIO 风扇引脚
 #define INA_PIN 13
 #define INB_PIN 12
-// #define LED_B 2 // 定义LED灯的引脚
 
+// GPIO 制冷和制热 
+#define HOT_PIN  14  
+#define COLD_PIN 27  
+
+/*------------------------------------------ WiFi & MQTT --------------------------------------------------*/
 #define WIFI_SSID "HUAWEI nova4"       //wifi名
 #define WIFI_PASSWD "12345678" //wifi密码
 
@@ -45,15 +50,16 @@ static const uint8_t ESP32_SDA = 18;
 // 设备post上传数据要用到一个json字符串, 这个是拼接postJson用到的一个字符串
 #define ALINK_METHOD_PROP_POST "thing.event.property.post"
 // 这是post上传数据使用的模板
-#define ALINK_BODY_FORMAT "{\"id\":\"%u\",\"version\":\"1.0\",\"method\":\"%s\",\"params\":%s}"
+#define ALINK_BODY_FORMAT "{\"id\":\"%u\",\"version\":\"1.0.0\",\"method\":\"%s\",\"params\":%s}"
 
 /*----------------------------------------- 全局变量 -------------------------------------------------*/
-int rate = 0;      // 电机转速 0-255
-int direction = 0; // 电机转向
-int postMsgId = 0; // 记录已经post了多少条
-Ticker tim1;       // 这个定时器是为了每5秒上传一次数据
+int rate = 0;      			  // 电机转速 0-255
+int direction = 0; 			  // 电机转向
+int postMsgId = 0; 			  // 记录已经post了多少条
+Ticker timer;       			  // 这个定时器是为了每5秒上传一次数据
 int readTemperature = 0;      // 环境温度
 int setTemperature  = 0;      // 设置温度
+int mode = 0;      			  // 模式 => [0:制冷, 1:加热]
 
 /*------------------------------------------- object -----------------------------------------------*/
 WiFiClient espClient;               //创建网络连接客户端
@@ -63,7 +69,18 @@ U8G2_SH1106_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0,  /*SCL*/ ESP32_SCL,  /*SDA*/ ES
 
 OneWire oneWire(DS18B20_PIN);
 DallasTemperature sensors(&oneWire);
-/*------------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------------------*/
+
+// 模式切换
+void modeChange() {
+	if (mode == 0) {
+		digitalWrite(COLD_PIN, 1);
+		digitalWrite(HOT_PIN, 0);
+	} else if (mode == 1) {
+		digitalWrite(COLD_PIN, 0);
+		digitalWrite(HOT_PIN, 1);
+	}
+}
 
 // 风扇控制
 void fanControl(bool flag, int data) {
@@ -87,6 +104,7 @@ void oledDisplay() {
     char info1[32];
     char info2[32];
     char info3[32];
+    char info4[32];
     sprintf(info1, "setTemperature: %d", setTemperature);
     sprintf(info2, "readTemperature: %d", readTemperature);
 	if (rate == 1) {
@@ -98,11 +116,12 @@ void oledDisplay() {
 	} else {
 		sprintf(info3, "rate: %s", "off");
 	}
-    
+    sprintf(info4, "mode: %s", mode == 0 ? "cold" : (mode == 1) ? "hot" : "");
 
     u8g2.drawStr(0, 10, info1);       
     u8g2.drawStr(0, 20, info2);       
     u8g2.drawStr(0, 30, info3);       
+    u8g2.drawStr(0, 40, info4);       
 
     u8g2.sendBuffer();                                       
 }
@@ -134,14 +153,14 @@ void clientReconnect() {
 		}
 	}
 }
-//mqtt发布post消息(上传数据)
+
+// mqtt发布post消息(上传数据)
 void mqttPublish() {
 	if (mqttClient.connected()) {
 		//先拼接出json字符串
 		char param[32];
 		char jsonBuf[128];
-		// sprintf(param, "{\"LightSwitch\":%d}", digitalRead(LED_B)); //我们把要上传的数据写在param里
-		sprintf(param, "{\"temperature\":%.1f}", 36.6); //我们把要上传的数据写在param里
+		sprintf(param, "{\"temperature\": %d}", readTemperature); //我们把要上传的数据写在param里
 		postMsgId += 1;
 		sprintf(jsonBuf, ALINK_BODY_FORMAT, postMsgId, ALINK_METHOD_PROP_POST, param);
 		//再从mqtt客户端中发布post消息
@@ -177,13 +196,18 @@ void callback(char *topic, byte *payload, unsigned int length)
 		Serial.println();
 
 		// 风扇逻辑处理
-		rate        = setAlinkMsgObj["params"]["fanRate"];
-		direction   = setAlinkMsgObj["params"]["fanDirection"];
+		rate           = setAlinkMsgObj["params"]["fanRate"];
+		direction      = setAlinkMsgObj["params"]["fanDirection"];
         setTemperature = setAlinkMsgObj["params"]["temperature"];
+		mode           = setAlinkMsgObj["params"]["mode"];
 		Serial.print("rate: ");
 		Serial.println(rate);
 		Serial.print("direction: ");
 		Serial.println(direction);
+		Serial.print("setTemperature: ");
+		Serial.println(setTemperature);
+		Serial.print("mode: ");
+		Serial.println(mode);
 	}
 }
 
@@ -206,8 +230,8 @@ void getTemperature() {
 	sensors.requestTemperatures(); 
 	float temperatureC = sensors.getTempCByIndex(0);
 	readTemperature = int(temperatureC);
-	Serial.print(temperatureC);
-	Serial.println("ºC");
+	// Serial.print(temperatureC);
+	// Serial.println("ºC");
 }
 
 void setup() {
@@ -215,20 +239,21 @@ void setup() {
 	pinMode(INA_PIN, OUTPUT);
 	pinMode(INB_PIN, OUTPUT);
 	pinMode(DS18B20_PIN, OUTPUT);
+	pinMode(HOT_PIN, OUTPUT);
+	pinMode(COLD_PIN, OUTPUT);
 
     u8g2.begin();
     
+	// Start the DS18B20 sensor
+  	sensors.begin();
+
 	setupWifi();
 	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
 		Serial.println("MQTT服务器连接成功!");
 	}
-	// ! 订阅Topic !!这是关键!!
-	mqttClient.subscribe(ALINK_TOPIC_PROP_SET);
-	mqttClient.setCallback(callback); // 绑定收到set主题时的回调(命令下发回调)
-	// tim1.attach(10, mqttPublish);     // 启动每5秒发布一次消息
-
-	// Start the DS18B20 sensor
-  	sensors.begin();
+	mqttClient.subscribe(ALINK_TOPIC_PROP_SET); // ! 订阅Topic !!这是关键!!
+	mqttClient.setCallback(callback);  			// 绑定收到set主题时的回调(命令下发回调)
+	timer.attach(10, mqttPublish);     			// 启动每5秒发布一次消息
 }
 
 
@@ -241,4 +266,6 @@ void loop() {
     oledDisplay();
 
 	getTemperature();
+
+	modeChange();
 }
