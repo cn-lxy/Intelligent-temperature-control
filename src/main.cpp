@@ -18,25 +18,53 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
+/*---- 函数定义 ------- */
+void mqttPublish(void);
+
 /*------------------------------------------ GPIO --------------------------------------------------*/
+// TAG
+// // GPIO DS18B20 
+// #define DS18B20_PIN 4
+
+// // GPIO OLED IIC引脚
+// static const uint8_t ESP32_SCL = 5;
+// static const uint8_t ESP32_SDA = 18;
+
+// // GPIO 风扇引脚
+// #define INA_PIN 13
+// #define INB_PIN 12
+
+// // GPIO 制冷和制热 
+// #define HOT_PIN  14
+// #define COLD_PIN 27
+
+// TAG version-2
 // GPIO DS18B20 
-#define DS18B20_PIN 4
+#define DS18B20_PIN 32
 
 // GPIO OLED IIC引脚
-static const uint8_t ESP32_SCL = 5;
-static const uint8_t ESP32_SDA = 18;
+static const uint8_t ESP32_SCL = 22;
+static const uint8_t ESP32_SDA = 21;
 
 // GPIO 风扇引脚
 #define INA_PIN 13
 #define INB_PIN 12
 
 // GPIO 制冷和制热 
-#define HOT_PIN  14  
-#define COLD_PIN 27  
+#define HOT_PIN  14
+#define COLD_PIN 27
 
-/*------------------------------------------ WiFi & MQTT --------------------------------------------------*/
-#define WIFI_SSID "HUAWEI nova4"       //wifi名
-#define WIFI_PASSWD "12345678" //wifi密码
+
+// TAG 温度加减按钮
+#define BTN_ADD 26
+#define BTN_SUB 25
+
+// Board LED
+#define LED 2
+
+/*------------------------------------------ WiFi & MQTT --------------------------------------------*/
+#define WIFI_SSID "DESKTOP-VADIOP2 9584"    //wifi名
+#define WIFI_PASSWD "12345678"  			//wifi密码
 
 #define PRODUCT_KEY "a1nKID4oRsp"                        //产品ID
 #define DEVICE_NAME "ESP32"                     //设备名
@@ -53,13 +81,13 @@ static const uint8_t ESP32_SDA = 18;
 #define ALINK_BODY_FORMAT "{\"id\":\"%u\",\"version\":\"1.0.0\",\"method\":\"%s\",\"params\":%s}"
 
 /*----------------------------------------- 全局变量 -------------------------------------------------*/
-int rate = 0;      			  // 电机转速 0-255
-int direction = 0; 			  // 电机转向
-int postMsgId = 0; 			  // 记录已经post了多少条
-Ticker timer;       			  // 这个定时器是为了每5秒上传一次数据
-int readTemperature = 0;      // 环境温度
-int setTemperature  = 0;      // 设置温度
-int mode = 0;      			  // 模式 => [0:制冷, 1:加热]
+volatile int windSpeed = 0;      	// 电机转速等级 0: 关闭; 1: 低速; 2: 中速; 3: 高速;
+volatile int direction = 0; 		// 电机转向
+int postMsgId = 0; 			  		// 记录已经post了多少条
+Ticker timer;       		  		// 这个定时器是为了每5秒上传一次数据
+volatile int envTemperature = 0;    // 环境温度
+volatile int setTemperature  = 0;   // 设置温度
+volatile int mode = 0;      	    // 模式 => [0:制冷, 1:加热]
 
 /*------------------------------------------- object -----------------------------------------------*/
 WiFiClient espClient;               //创建网络连接客户端
@@ -82,18 +110,87 @@ void modeChange() {
 	}
 }
 
-// 风扇控制
-void fanControl(bool flag, int data) {
-	int rate = 0;
-	if (data == 1) {
-		rate = 150;
-	} else if (data == 2) {
-		rate = 200;
-	} else if (data == 3) {
-		rate = 255;
+// TAG 按键处理 [风速，制热制冷]
+void keysHandler() {
+	// TAG 制热
+	// if (digitalRead(HOT_PIN) == 1 && digitalRead(COLD_PIN) == 0) {
+	// 	delay(10);
+	// 	if (digitalRead(HOT_PIN) == 1 && digitalRead(COLD_PIN) == 0)
+	// 		mode = 1;
+	// } else if (digitalRead(HOT_PIN) == 0 && digitalRead(COLD_PIN) == 1) {
+	// 制冷
+	// 	delay(10);
+	// 	if (digitalRead(HOT_PIN) == 0 && digitalRead(COLD_PIN) == 1)
+	// 		mode = 0;
+	// }
+
+	// TAG风速等级切换
+	// if (digitalRead(GRADE_LOW) == 1 && digitalRead(GRADE_MIDDLE) == 0 && digitalRead(GRADE_LOW) == 0) {
+	// 	delay(10);
+	// 	if (digitalRead(GRADE_LOW) == 1 && digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 0)
+	// 		windSpeed = 1;
+	// } else if (digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 1 && digitalRead(GRADE_LOW) == 0) {
+	// 	delay(10);
+	// 	if (digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 1 && digitalRead(GRADE_LOW) == 0)
+	// 		windSpeed = 2;
+	// } else if (digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 1) {
+	// 	delay(10);
+	// 	if (digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 0 && digitalRead(GRADE_LOW) == 1)
+	// 		windSpeed = 3;
+	// }
+
+	// TAG 温度加减判断 低电平触发
+	if (digitalRead(BTN_ADD) == 0 && digitalRead(BTN_SUB) == 1) {
+		delay(10);
+		if (digitalRead(BTN_ADD) == 0 && digitalRead(BTN_SUB) == 1) {
+			if (setTemperature < 40)
+				setTemperature++;
+			mqttPublish();
+		}
+	} else if (digitalRead(BTN_ADD) == 1 && digitalRead(BTN_SUB) == 0) {
+		delay(10);
+		if (digitalRead(BTN_ADD) == 1 && digitalRead(BTN_SUB) == 0) {
+			if (setTemperature > 0 )
+				setTemperature--;
+			mqttPublish();
+		}
 	}
-	analogWrite(INA_PIN, flag ? 0    : rate); // 0--255
-	analogWrite(INB_PIN, flag ? rate : 0);
+}
+
+// 风扇控制
+void fanControl() {
+	int rate = 0;
+	Serial.printf("windSpeed: %d\n", windSpeed);
+	if (windSpeed == 1) {
+		rate = 400;
+	} else if (windSpeed == 2) {
+		rate = 700;
+	} else if (windSpeed == 3) {
+		rate = 1024;
+	} else {
+		rate = 0;
+	}
+	
+	// 当温度达到设定温度时会自动关闭风扇
+	// if ( (mode == 0 && envTemperature <= setTemperature) || (mode == 1 && envTemperature >= setTemperature) ) {
+	// 	rate = 0;
+	// }
+
+	// BUG `analogWrite` function is not implemented is ESP32 lib.
+	// analogWrite(INA_PIN, direction ? 0    : rate); // 0--255
+	// analogWrite(INB_PIN, direction ? rate : 0);
+	
+	ledcWrite(1, direction ? 0    : rate);
+	ledcWrite(2, direction ? rate : 0);
+}
+
+// 屏幕打印信息
+void oledLog(String s) {
+	u8g2.clearBuffer();                                       
+    u8g2.setFont(u8g2_font_ncenB08_tr);      
+    u8g2.setColorIndex(3);
+	u8g2.drawStr(0, 10, s.c_str());
+	u8g2.sendBuffer();
 }
 
 // 屏幕显示
@@ -106,15 +203,15 @@ void oledDisplay() {
     char info3[32];
     char info4[32];
     sprintf(info1, "setTemperature: %d", setTemperature);
-    sprintf(info2, "readTemperature: %d", readTemperature);
-	if (rate == 1) {
-		sprintf(info3, "rate: %s", "low");
-	} else if (rate == 2) {
-		sprintf(info3, "rate: %s", "center");
-	} else if (rate == 3) {
-		sprintf(info3, "rate: %s", "hight");
+    sprintf(info2, "readTemperature: %d", envTemperature);
+	if (windSpeed == 1) {
+		sprintf(info3, "grade: %s", "low");
+	} else if (windSpeed == 2) {
+		sprintf(info3, "grade: %s", "center");
+	} else if (windSpeed == 3) {
+		sprintf(info3, "grade: %s", "hight");
 	} else {
-		sprintf(info3, "rate: %s", "off");
+		sprintf(info3, "grade: %s", "off");
 	}
     sprintf(info4, "mode: %s", mode == 0 ? "cold" : (mode == 1) ? "hot" : "");
 
@@ -132,8 +229,8 @@ void setupWifi() {
 	Serial.println("连接WIFI");
 	WiFi.begin(WIFI_SSID, WIFI_PASSWD);
 	while (!WiFi.isConnected()) {
-	Serial.print(".");
-		delay(500);
+		Serial.print(".");
+			delay(500);
 	}
 	Serial.println("OK");
 	Serial.println("Wifi连接成功");
@@ -158,9 +255,10 @@ void clientReconnect() {
 void mqttPublish() {
 	if (mqttClient.connected()) {
 		//先拼接出json字符串
-		char param[32];
-		char jsonBuf[128];
-		sprintf(param, "{\"temperature\": %d}", readTemperature); //我们把要上传的数据写在param里
+		char param[128];
+		char jsonBuf[256];
+		// 云端属性采用首字母大写驼峰命名法
+		sprintf(param, "{\"EnvTemperature\": %d, \"WindSpeed\": %d, \"SetTemperature\": %d}", envTemperature, windSpeed, setTemperature); //我们把要上传的数据写在param里
 		postMsgId += 1;
 		sprintf(jsonBuf, ALINK_BODY_FORMAT, postMsgId, ALINK_METHOD_PROP_POST, param);
 		//再从mqtt客户端中发布post消息
@@ -170,8 +268,12 @@ void mqttPublish() {
 		} else {
 			Serial.println("Publish message to cloud failed!");
 		}
+		digitalWrite(LED, HIGH);
+		delay(50);
+		digitalWrite(LED, LOW);
 	}
 }
+
 // 收到消息回调
 void callback(char *topic, byte *payload, unsigned int length)
 {
@@ -196,12 +298,12 @@ void callback(char *topic, byte *payload, unsigned int length)
 		Serial.println();
 
 		// 风扇逻辑处理
-		rate           = setAlinkMsgObj["params"]["fanRate"];
+		windSpeed      = setAlinkMsgObj["params"]["fanRate"];
 		direction      = setAlinkMsgObj["params"]["fanDirection"];
         setTemperature = setAlinkMsgObj["params"]["temperature"];
 		mode           = setAlinkMsgObj["params"]["mode"];
-		Serial.print("rate: ");
-		Serial.println(rate);
+		Serial.print("windSpeed: ");
+		Serial.println(windSpeed);
 		Serial.print("direction: ");
 		Serial.println(direction);
 		Serial.print("setTemperature: ");
@@ -228,32 +330,65 @@ void mqttCheck() {
 // 获取DS18B20温度
 void getTemperature() {
 	sensors.requestTemperatures(); 
-	float temperatureC = sensors.getTempCByIndex(0);
-	readTemperature = int(temperatureC);
+	float tempC = sensors.getTempCByIndex(0);
+	if(tempC != DEVICE_DISCONNECTED_C) {
+		Serial.print("Temperature for the device 1 (index 0) is: ");
+		Serial.println(tempC);
+	} else {
+	Serial.println("Error: Could not read temperature data");
+	}
+	envTemperature = int(tempC);
 	// Serial.print(temperatureC);
 	// Serial.println("ºC");
 }
 
+void log() {
+	Serial.printf("grade: %d\n", windSpeed);
+	Serial.printf("envTemperature: %d\n", envTemperature);
+	Serial.printf("setTemperature: %d\n", setTemperature);
+	Serial.printf("mode: %d\n", mode);
+}
+
 void setup() {
+    u8g2.begin();
+
+	oledLog("init pin");
+
 	Serial.begin(115200);
 	pinMode(INA_PIN, OUTPUT);
 	pinMode(INB_PIN, OUTPUT);
 	pinMode(DS18B20_PIN, OUTPUT);
 	pinMode(HOT_PIN, OUTPUT);
 	pinMode(COLD_PIN, OUTPUT);
+	pinMode(BTN_ADD, INPUT_PULLUP);
+	pinMode(BTN_SUB, INPUT_PULLUP);
+	pinMode(LED, OUTPUT);
 
-    u8g2.begin();
-    
+	ledcSetup(1, 1000, 10);
+	ledcAttachPin(INA_PIN, 1);
+    ledcSetup(2, 1000, 10);
+	ledcAttachPin(INB_PIN, 2);
+
+	oledLog("init DS18B20 sensor");
+	
 	// Start the DS18B20 sensor
-  	sensors.begin();
+	sensors.begin();
+
+	oledLog("init wifi");
 
 	setupWifi();
 	if (connectAliyunMQTT(mqttClient, PRODUCT_KEY, DEVICE_NAME, DEVICE_SECRET)) {
 		Serial.println("MQTT服务器连接成功!");
 	}
+
+	oledLog("init mqtt");
+
 	mqttClient.subscribe(ALINK_TOPIC_PROP_SET); // ! 订阅Topic !!这是关键!!
 	mqttClient.setCallback(callback);  			// 绑定收到set主题时的回调(命令下发回调)
 	timer.attach(10, mqttPublish);     			// 启动每5秒发布一次消息
+
+	oledLog("all init success!");
+	delay(500);
 }
 
 
@@ -261,11 +396,10 @@ void loop() {
 	mqttCheck();  // 检查连接
 	mqttClient.loop();  // mqtt客户端监听 不会阻塞
 
-	fanControl(direction, rate);
-
-    oledDisplay();
-
 	getTemperature();
-
+	keysHandler();
+	fanControl();
 	modeChange();
+    oledDisplay();
+	log();
 }
