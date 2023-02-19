@@ -54,7 +54,6 @@ static const uint8_t ESP32_SDA = 21;
 #define HOT_PIN  14
 #define COLD_PIN 27
 
-
 // TAG 温度加减按钮
 #define BTN_ADD 26
 #define BTN_SUB 25
@@ -63,11 +62,11 @@ static const uint8_t ESP32_SDA = 21;
 #define LED 2
 
 /*------------------------------------------ WiFi & MQTT --------------------------------------------*/
-#define WIFI_SSID "DESKTOP-VADIOP2 9584"    //wifi名
-#define WIFI_PASSWD "12345678"  			//wifi密码
+#define WIFI_SSID "DESKTOP-LXY"    						 //wifi名
+#define WIFI_PASSWD "12345678"  						 //wifi密码
 
 #define PRODUCT_KEY "a1nKID4oRsp"                        //产品ID
-#define DEVICE_NAME "ESP32"                     //设备名
+#define DEVICE_NAME "ESP32"                     		 //设备名
 #define DEVICE_SECRET "a687a3d6e96dc9272e90450841d8d564" //设备key
 #define REGION_ID "cn-shanghai"
 
